@@ -419,68 +419,31 @@ const getPieceFenSymbol = (piece) => {
 }
 
 const updateUrl = () => {
-  const url = new URL(window.location)
-  url.searchParams.set('fen', currentFen.value)
-  // Encode the history array to prevent issues with special characters
-  url.searchParams.set('history', encodeURIComponent(moveHistory.value.join('|')))
-  url.searchParams.set('move', currentMoveIndex.value.toString())
-  window.history.replaceState({}, '', url)
+  const fen = currentFen.value
+  // Compress FEN using base64 encoding
+  const compressedFen = btoa(fen).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const url = new URL(window.location.href)
+  url.searchParams.set('fen', compressedFen)
+  window.history.pushState({}, '', url)
 }
 
 const loadFromUrl = () => {
-  const url = new URL(window.location)
-  const historyStr = url.searchParams.get('history')
-  const moveIndex = url.searchParams.get('move')
-  const fenFromUrl = url.searchParams.get('fen')
-  
-  if (historyStr) {
+  const url = new URL(window.location.href)
+  const compressedFen = url.searchParams.get('fen')
+  if (compressedFen) {
     try {
-      // Decode the history string and split by the separator
-      moveHistory.value = decodeURIComponent(historyStr).split('|')
-      currentMoveIndex.value = moveIndex ? parseInt(moveIndex) : moveHistory.value.length - 1
-      
-      // Ensure the index is valid
-      if (currentMoveIndex.value < 0) currentMoveIndex.value = 0
-      if (currentMoveIndex.value >= moveHistory.value.length) {
-        currentMoveIndex.value = moveHistory.value.length - 1
-      }
-
-      // Load the position from history
-      if (currentMoveIndex.value >= 0 && currentMoveIndex.value < moveHistory.value.length) {
-        parseFen(moveHistory.value[currentMoveIndex.value])
-        currentFen.value = moveHistory.value[currentMoveIndex.value]
+      // Decompress FEN from base64
+      const paddedFen = compressedFen.replace(/-/g, '+').replace(/_/g, '/')
+      const fen = atob(paddedFen)
+      if (parseFen(fen)) {
+        console.log('Loaded position from URL:', fen)
+        return true
       }
     } catch (error) {
-      console.error('Error loading history:', error)
-      // Fallback to initial position if history loading fails
-      initializeBoard()
-      currentFen.value = generateFen()
-      moveHistory.value = [currentFen.value]
-      currentMoveIndex.value = 0
+      console.error('Error loading position from URL:', error)
     }
-  } else if (fenFromUrl) {
-    // If no history but FEN exists, start new history with this position
-    if (parseFen(fenFromUrl)) {
-      currentFen.value = fenFromUrl
-      moveHistory.value = [fenFromUrl]
-      currentMoveIndex.value = 0
-    } else {
-      // If FEN is invalid, initialize with starting position
-      initializeBoard()
-      currentFen.value = generateFen()
-      moveHistory.value = [currentFen.value]
-      currentMoveIndex.value = 0
-    }
-  } else {
-    // No history or FEN in URL, start with initial position
-    initializeBoard()
-    currentFen.value = generateFen()
-    moveHistory.value = [currentFen.value]
-    currentMoveIndex.value = 0
   }
-  
-  // Always update URL after loading to ensure proper encoding
-  updateUrl()
+  return false
 }
 
 const addMoveToHistory = (fen) => {
