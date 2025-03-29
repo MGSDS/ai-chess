@@ -24,6 +24,11 @@ const availableModels = ref([])
 const isLoadingModels = ref(false)
 const modelError = ref('')
 const autoPlayBlack = ref(true)
+const lastMove = ref(null)
+const castlingRights = ref({
+  white: { king: true, queen: true },
+  black: { king: true, queen: true }
+})
 
 const canMakeAIMove = computed(() => {
   return openaiKey.value && 
@@ -81,79 +86,242 @@ const isPathClear = (fromRow, fromCol, toRow, toCol) => {
 
 const isValidMove = (fromRow, fromCol, toRow, toCol) => {
   const piece = board.value[fromRow][fromCol]
-  const targetSquare = board.value[toRow][toCol]
+  if (!piece) return false
 
-  // Can't capture your own piece
-  if (targetSquare && targetSquare.color === piece.color) {
-    return false
-  }
+  // Check if it's the correct turn
+  if (piece.color === 'white' && !isWhiteTurn.value) return false
+  if (piece.color === 'black' && isWhiteTurn.value) return false
 
-  const rowDiff = Math.abs(toRow - fromRow)
-  const colDiff = Math.abs(toCol - fromCol)
+  // Check if the target square is occupied by a friendly piece
+  const targetPiece = board.value[toRow][toCol]
+  if (targetPiece && targetPiece.color === piece.color) return false
 
-  let isValidBasicMove = false;
+  // Get valid moves based on piece type
+  const moves = getValidMovesForPiece(fromRow, fromCol, piece)
+  return moves.some(move => move.row === toRow && move.col === toCol)
+}
+
+const getValidMovesForPiece = (row, col, piece) => {
+  const moves = []
+  const color = piece.color
+  const isWhite = color === 'white'
+  const direction = isWhite ? -1 : 1
 
   switch (piece.type) {
     case 'pawn':
-      // Direction of movement depends on color
-      const direction = piece.color === 'white' ? -1 : 1
-      const startRow = piece.color === 'white' ? 6 : 1
+      // Forward move
+      if (!board.value[row + direction]?.[col]) {
+        moves.push({ row: row + direction, col })
+        // First move can be 2 squares
+        if ((isWhite && row === 6) || (!isWhite && row === 1)) {
+          if (!board.value[row + 2 * direction]?.[col]) {
+            moves.push({ row: row + 2 * direction, col })
+          }
+        }
+      }
+      // Captures
+      if (board.value[row + direction]?.[col - 1]?.color === (isWhite ? 'black' : 'white')) {
+        moves.push({ row: row + direction, col: col - 1 })
+      }
+      if (board.value[row + direction]?.[col + 1]?.color === (isWhite ? 'black' : 'white')) {
+        moves.push({ row: row + direction, col: col + 1 })
+      }
+      // En passant
+      if (lastMove.value) {
+        const lastPiece = board.value[lastMove.value.toRow][lastMove.value.toCol]
+        if (lastPiece?.type === 'pawn' && 
+            Math.abs(lastMove.value.fromRow - lastMove.value.toRow) === 2 &&
+            Math.abs(col - lastMove.value.toCol) === 1 &&
+            row === lastMove.value.toRow) {
+          moves.push({ row: row + direction, col: lastMove.value.toCol })
+        }
+      }
+      break
 
-      // Regular move forward
-      if (colDiff === 0 && toRow === fromRow + direction && !targetSquare) {
-        isValidBasicMove = true
+    case 'rook':
+      // Horizontal moves
+      for (let i = col - 1; i >= 0; i--) {
+        if (!board.value[row][i]) {
+          moves.push({ row, col: i })
+        } else {
+          if (board.value[row][i].color !== color) {
+            moves.push({ row, col: i })
+          }
+          break
+        }
       }
-      // Initial two-square move
-      else if (colDiff === 0 && fromRow === startRow && toRow === fromRow + 2 * direction && !targetSquare && !board.value[fromRow + direction][fromCol]) {
-        isValidBasicMove = true
+      for (let i = col + 1; i < 8; i++) {
+        if (!board.value[row][i]) {
+          moves.push({ row, col: i })
+        } else {
+          if (board.value[row][i].color !== color) {
+            moves.push({ row, col: i })
+          }
+          break
+        }
       }
-      // Capture diagonally
-      else if (colDiff === 1 && toRow === fromRow + direction && targetSquare && targetSquare.color !== piece.color) {
-        isValidBasicMove = true
+      // Vertical moves
+      for (let i = row - 1; i >= 0; i--) {
+        if (!board.value[i][col]) {
+          moves.push({ row: i, col })
+        } else {
+          if (board.value[i][col].color !== color) {
+            moves.push({ row: i, col })
+          }
+          break
+        }
+      }
+      for (let i = row + 1; i < 8; i++) {
+        if (!board.value[i][col]) {
+          moves.push({ row: i, col })
+        } else {
+          if (board.value[i][col].color !== color) {
+            moves.push({ row: i, col })
+          }
+          break
+        }
       }
       break
 
     case 'knight':
-      isValidBasicMove = (rowDiff === 2 && colDiff === 1) || (rowDiff === 1 && colDiff === 2)
+      const knightMoves = [
+        { row: -2, col: -1 }, { row: -2, col: 1 },
+        { row: -1, col: -2 }, { row: -1, col: 2 },
+        { row: 1, col: -2 }, { row: 1, col: 2 },
+        { row: 2, col: -1 }, { row: 2, col: 1 }
+      ]
+      for (const move of knightMoves) {
+        const newRow = row + move.row
+        const newCol = col + move.col
+        if (newRow >= 0 && newRow < 8 && newCol >= 0 && newCol < 8) {
+          if (!board.value[newRow][newCol] || board.value[newRow][newCol].color !== color) {
+            moves.push({ row: newRow, col: newCol })
+          }
+        }
+      }
       break
 
     case 'bishop':
-      isValidBasicMove = rowDiff === colDiff && isPathClear(fromRow, fromCol, toRow, toCol)
-      break
-
-    case 'rook':
-      isValidBasicMove = (rowDiff === 0 || colDiff === 0) && isPathClear(fromRow, fromCol, toRow, toCol)
+      // Diagonal moves
+      for (let i = 1; i < 8; i++) {
+        if (row - i >= 0 && col - i >= 0) {
+          if (!board.value[row - i][col - i]) {
+            moves.push({ row: row - i, col: col - i })
+          } else {
+            if (board.value[row - i][col - i].color !== color) {
+              moves.push({ row: row - i, col: col - i })
+            }
+            break
+          }
+        }
+      }
+      for (let i = 1; i < 8; i++) {
+        if (row - i >= 0 && col + i < 8) {
+          if (!board.value[row - i][col + i]) {
+            moves.push({ row: row - i, col: col + i })
+          } else {
+            if (board.value[row - i][col + i].color !== color) {
+              moves.push({ row: row - i, col: col + i })
+            }
+            break
+          }
+        }
+      }
+      for (let i = 1; i < 8; i++) {
+        if (row + i < 8 && col - i >= 0) {
+          if (!board.value[row + i][col - i]) {
+            moves.push({ row: row + i, col: col - i })
+          } else {
+            if (board.value[row + i][col - i].color !== color) {
+              moves.push({ row: row + i, col: col - i })
+            }
+            break
+          }
+        }
+      }
+      for (let i = 1; i < 8; i++) {
+        if (row + i < 8 && col + i < 8) {
+          if (!board.value[row + i][col + i]) {
+            moves.push({ row: row + i, col: col + i })
+          } else {
+            if (board.value[row + i][col + i].color !== color) {
+              moves.push({ row: row + i, col: col + i })
+            }
+            break
+          }
+        }
+      }
       break
 
     case 'queen':
-      isValidBasicMove = (rowDiff === colDiff || rowDiff === 0 || colDiff === 0) && isPathClear(fromRow, fromCol, toRow, toCol)
+      // Combine rook and bishop moves
+      const queenMoves = getValidMovesForPiece(row, col, { type: 'rook', color })
+        .concat(getValidMovesForPiece(row, col, { type: 'bishop', color }))
+      moves.push(...queenMoves)
       break
 
     case 'king':
-      isValidBasicMove = rowDiff <= 1 && colDiff <= 1
+      const kingMoves = [
+        { row: -1, col: -1 }, { row: -1, col: 0 }, { row: -1, col: 1 },
+        { row: 0, col: -1 }, { row: 0, col: 1 },
+        { row: 1, col: -1 }, { row: 1, col: 0 }, { row: 1, col: 1 }
+      ]
+      for (const move of kingMoves) {
+        const newRow = row + move.row
+        const newCol = col + move.col
+        if (newRow >= 0 && newRow < 8 && newCol >= 0 && newCol < 8) {
+          if (!board.value[newRow][newCol] || board.value[newRow][newCol].color !== color) {
+            moves.push({ row: newRow, col: newCol })
+          }
+        }
+      }
+      // Castling
+      if (!isKingInCheck(color)) {
+        const castling = castlingRights.value[color]
+        if (castling.king && 
+            !board.value[row][5] && 
+            !board.value[row][6] && 
+            !isSquareUnderAttack(row, 5, color) && 
+            !isSquareUnderAttack(row, 6, color)) {
+          moves.push({ row, col: 6 })
+        }
+        if (castling.queen && 
+            !board.value[row][1] && 
+            !board.value[row][2] && 
+            !board.value[row][3] && 
+            !isSquareUnderAttack(row, 2, color) && 
+            !isSquareUnderAttack(row, 3, color)) {
+          moves.push({ row, col: 2 })
+        }
+      }
       break
-
-    default:
-      return false
   }
 
-  if (!isValidBasicMove) {
-    return false
+  // Filter out moves that would put/leave the king in check
+  return moves.filter(move => {
+    const originalTarget = board.value[move.row][move.col]
+    board.value[move.row][move.col] = piece
+    board.value[row][col] = null
+    const leavesInCheck = isKingInCheck(color)
+    board.value[row][col] = piece
+    board.value[move.row][move.col] = originalTarget
+    return !leavesInCheck
+  })
+}
+
+const isSquareUnderAttack = (row, col, defendingColor) => {
+  for (let i = 0; i < 8; i++) {
+    for (let j = 0; j < 8; j++) {
+      const piece = board.value[i][j]
+      if (piece && piece.color !== defendingColor) {
+        const moves = getValidMovesForPiece(i, j, piece)
+        if (moves.some(move => move.row === row && move.col === col)) {
+          return true
+        }
+      }
+    }
   }
-
-  // Make the move temporarily
-  const originalTarget = board.value[toRow][toCol]
-  board.value[toRow][toCol] = piece
-  board.value[fromRow][fromCol] = null
-
-  // Check if the move leaves the king in check
-  const leavesInCheck = isKingInCheck(piece.color)
-
-  // Undo the move
-  board.value[fromRow][fromCol] = piece
-  board.value[toRow][toCol] = originalTarget
-
-  return !leavesInCheck
+  return false
 }
 
 const getPieceEmoji = (piece) => {
@@ -207,11 +375,23 @@ const generateFen = () => {
   // Active color
   fen += ' ' + (isWhiteTurn.value ? 'w' : 'b')
 
-  // Castling availability (simplified - assuming no castling for now)
-  fen += ' -'
+  // Castling availability
+  let castling = ''
+  if (castlingRights.value.white.king) castling += 'K'
+  if (castlingRights.value.white.queen) castling += 'Q'
+  if (castlingRights.value.black.king) castling += 'k'
+  if (castlingRights.value.black.queen) castling += 'q'
+  fen += ' ' + (castling || '-')
 
-  // En passant target square (simplified - no en passant for now)
-  fen += ' -'
+  // En passant target square
+  if (lastMove.value && 
+      board.value[lastMove.value.toRow][lastMove.value.toCol]?.type === 'pawn' && 
+      Math.abs(lastMove.value.fromRow - lastMove.value.toRow) === 2) {
+    const targetRow = lastMove.value.fromRow + (lastMove.value.fromRow < lastMove.value.toRow ? 1 : -1)
+    fen += ' ' + String.fromCharCode(97 + lastMove.value.toCol) + (8 - targetRow)
+  } else {
+    fen += ' -'
+  }
 
   // Halfmove clock (simplified - always 0 for now)
   fen += ' 0'
@@ -377,15 +557,57 @@ const handleCellClick = (row, col) => {
     const fromRow = selectedPosition.value.row
     const fromCol = selectedPosition.value.col
     
+    // Handle castling
+    if (selectedPiece.value.type === 'king' && Math.abs(col - fromCol) === 2) {
+      const isKingSide = col > fromCol
+      const rookFromCol = isKingSide ? 7 : 0
+      const rookToCol = isKingSide ? col - 1 : col + 1
+      const rookRow = fromRow
+      
+      // Move the rook
+      board.value[rookRow][rookToCol] = board.value[rookRow][rookFromCol]
+      board.value[rookRow][rookFromCol] = null
+      
+      // Update castling rights
+      if (isKingSide) {
+        castlingRights.value[selectedPiece.value.color].king = false
+      } else {
+        castlingRights.value[selectedPiece.value.color].queen = false
+      }
+    }
+    
+    // Handle en passant
+    if (selectedPiece.value.type === 'pawn' && 
+        Math.abs(col - fromCol) === 1 && 
+        !board.value[row][col]) {
+      const capturedPawnRow = fromRow
+      board.value[capturedPawnRow][col] = null
+    }
+    
     // Make the move
     board.value[row][col] = { ...selectedPiece.value }
     board.value[fromRow][fromCol] = null
+    
+    // Update castling rights for king and rook moves
+    if (selectedPiece.value.type === 'king') {
+      castlingRights.value[selectedPiece.value.color].king = false
+      castlingRights.value[selectedPiece.value.color].queen = false
+    } else if (selectedPiece.value.type === 'rook') {
+      if (fromCol === 0) {
+        castlingRights.value[selectedPiece.value.color].queen = false
+      } else if (fromCol === 7) {
+        castlingRights.value[selectedPiece.value.color].king = false
+      }
+    }
     
     // Reset selection and switch turns
     selectedPiece.value = null
     selectedPosition.value = null
     validMoves.value = []
     isWhiteTurn.value = !isWhiteTurn.value
+    
+    // Store last move for en passant
+    lastMove.value = { fromRow, fromCol, toRow: row, toCol: col }
     
     // Update FEN and history
     currentFen.value = generateFen()
@@ -437,6 +659,26 @@ const parseFen = (fen) => {
     
     // Set turn
     isWhiteTurn.value = turn === 'w'
+    
+    // Set castling rights
+    castlingRights.value = {
+      white: { king: castling.includes('K'), queen: castling.includes('Q') },
+      black: { king: castling.includes('k'), queen: castling.includes('q') }
+    }
+    
+    // Set en passant target square
+    if (enPassant !== '-') {
+      const col = enPassant.charCodeAt(0) - 97
+      const row = 8 - parseInt(enPassant[1])
+      lastMove.value = {
+        fromRow: row + (isWhiteTurn.value ? 1 : -1),
+        fromCol: col,
+        toRow: row - (isWhiteTurn.value ? 1 : -1),
+        toCol: col
+      }
+    } else {
+      lastMove.value = null
+    }
     
     // Reset selection
     selectedPiece.value = null
