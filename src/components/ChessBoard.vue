@@ -29,6 +29,9 @@ const castlingRights = ref({
   white: { king: true, queen: true },
   black: { king: true, queen: true }
 })
+const showPromotionDialog = ref(false)
+const promotionPosition = ref(null)
+const promotionColor = ref(null)
 
 const canMakeAIMove = computed(() => {
   return openaiKey.value && 
@@ -552,6 +555,14 @@ const handleCellClick = (row, col) => {
       return
     }
 
+    // Check for pawn promotion
+    if (selectedPiece.value.type === 'pawn' && (row === 0 || row === 7)) {
+      showPromotionDialog.value = true
+      promotionPosition.value = { fromRow: selectedPosition.value.row, fromCol: selectedPosition.value.col, toRow: row, toCol: col }
+      promotionColor.value = selectedPiece.value.color
+      return
+    }
+
     // Move the piece
     console.log('Moving piece from', selectedPosition.value, 'to', { row, col })
     const fromRow = selectedPosition.value.row
@@ -797,21 +808,95 @@ const hasLegalMoves = (color) => {
 }
 
 const checkGameStatus = () => {
-  const currentColor = isWhiteTurn.value ? 'white' : 'black'
-  const inCheck = isKingInCheck(currentColor)
-  const canMove = hasLegalMoves(currentColor)
-
-  if (inCheck && !canMove) {
-    isGameOver.value = true
-    gameStatus.value = `Checkmate! ${currentColor === 'white' ? 'Black' : 'White'} wins!`
-  } else if (!inCheck && !canMove) {
-    isGameOver.value = true
-    gameStatus.value = 'Stalemate! Game is a draw!'
-  } else if (inCheck) {
-    gameStatus.value = `${currentColor === 'white' ? 'White' : 'Black'} is in check!`
-  } else {
-    gameStatus.value = ''
+  // Check for king capture
+  let whiteKing = false
+  let blackKing = false
+  
+  for (let i = 0; i < 8; i++) {
+    for (let j = 0; j < 8; j++) {
+      const piece = board.value[i][j]
+      if (piece) {
+        if (piece.type === 'king') {
+          if (piece.color === 'white') whiteKing = true
+          else blackKing = true
+        }
+      }
+    }
   }
+
+  if (!whiteKing) {
+    isGameOver.value = true
+    gameStatus.value = 'Black wins by capturing the king!'
+    return
+  }
+
+  if (!blackKing) {
+    isGameOver.value = true
+    gameStatus.value = 'White wins by capturing the king!'
+    return
+  }
+
+  // Check for checkmate and stalemate
+  const currentColor = isWhiteTurn.value ? 'white' : 'black'
+  const isInCheck = isKingInCheck(currentColor)
+  
+  // Check for valid moves
+  let hasValidMoves = false
+  for (let i = 0; i < 8; i++) {
+    for (let j = 0; j < 8; j++) {
+      const piece = board.value[i][j]
+      if (piece && piece.color === currentColor) {
+        const moves = getValidMovesForPiece(i, j, piece)
+        if (moves.length > 0) {
+          hasValidMoves = true
+          break
+        }
+      }
+    }
+    if (hasValidMoves) break
+  }
+
+  if (isInCheck && !hasValidMoves) {
+    isGameOver.value = true
+    gameStatus.value = `${currentColor === 'white' ? 'Black' : 'White'} wins by checkmate!`
+    return
+  }
+
+  if (!isInCheck && !hasValidMoves) {
+    isGameOver.value = true
+    gameStatus.value = 'Game is a stalemate!'
+    return
+  }
+
+  // Check for insufficient material
+  const pieces = []
+  for (let i = 0; i < 8; i++) {
+    for (let j = 0; j < 8; j++) {
+      const piece = board.value[i][j]
+      if (piece) pieces.push(piece)
+    }
+  }
+
+  if (pieces.length === 2) {
+    // King vs King
+    isGameOver.value = true
+    gameStatus.value = 'Game is a draw due to insufficient material!'
+    return
+  }
+
+  if (pieces.length === 3) {
+    const pieceTypes = pieces.map(p => p.type)
+    if (pieceTypes.includes('king') && 
+        (pieceTypes.includes('bishop') || pieceTypes.includes('knight'))) {
+      isGameOver.value = true
+      gameStatus.value = 'Game is a draw due to insufficient material!'
+      return
+    }
+  }
+
+  // Game continues
+  isGameOver.value = false
+  gameStatus.value = ''
 }
 
 const resetBoard = () => {
@@ -1010,6 +1095,37 @@ watch(isWhiteTurn, async (newValue) => {
     await requestAIMove()
   }
 })
+
+const handlePromotion = (promotedType) => {
+  if (!promotionPosition.value) return
+
+  const { fromRow, fromCol, toRow, toCol } = promotionPosition.value
+  
+  // Make the move with the promoted piece
+  board.value[toRow][toCol] = { type: promotedType, color: promotionColor.value }
+  board.value[fromRow][fromCol] = null
+  
+  // Reset promotion state
+  showPromotionDialog.value = false
+  promotionPosition.value = null
+  promotionColor.value = null
+  
+  // Reset selection and switch turns
+  selectedPiece.value = null
+  selectedPosition.value = null
+  validMoves.value = []
+  isWhiteTurn.value = !isWhiteTurn.value
+  
+  // Store last move for en passant
+  lastMove.value = { fromRow, fromCol, toRow, toCol }
+  
+  // Update FEN and history
+  currentFen.value = generateFen()
+  addMoveToHistory(currentFen.value)
+
+  // Check game status
+  checkGameStatus()
+}
 
 // Initialize board and load from URL if present
 onMounted(() => {
@@ -1228,6 +1344,22 @@ onMounted(() => {
               <div class="fen-text">{{ fen }}</div>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Add promotion dialog -->
+    <div v-if="showPromotionDialog" class="promotion-dialog">
+      <div class="promotion-title">Choose promotion piece</div>
+      <div class="promotion-pieces">
+        <div 
+          v-for="piece in ['queen', 'rook', 'bishop', 'knight']" 
+          :key="piece"
+          class="promotion-piece"
+          :class="promotionColor"
+          @click="handlePromotion(piece)"
+        >
+          {{ getPieceEmoji({ type: piece, color: promotionColor }) }}
         </div>
       </div>
     </div>
@@ -1786,5 +1918,58 @@ h1 {
   color: #ff5252;
   font-size: 0.9em;
   margin-top: 4px;
+}
+
+.promotion-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: #1a1a1a;
+  border: 2px solid #4a4a4a;
+  border-radius: 8px;
+  padding: 20px;
+  z-index: 1000;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.promotion-title {
+  color: #ffffff;
+  text-align: center;
+  font-size: 1.2em;
+  margin-bottom: 15px;
+}
+
+.promotion-pieces {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.promotion-piece {
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 45px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s;
+  background-color: #3a3a3a;
+}
+
+.promotion-piece:hover {
+  background-color: #4a4a4a;
+  transform: scale(1.1);
+}
+
+.promotion-piece.white {
+  color: #ffffff;
+  text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+}
+
+.promotion-piece.black {
+  color: #000000;
 }
 </style> 
