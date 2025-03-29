@@ -742,9 +742,8 @@ const handleFenInput = (event) => {
   }
 }
 
-// Add after isValidMove function
 const isKingInCheck = (color) => {
-  // Find the king's position
+  // Find the king
   let kingRow = -1
   let kingCol = -1
   for (let i = 0; i < 8; i++) {
@@ -759,19 +758,10 @@ const isKingInCheck = (color) => {
     if (kingRow !== -1) break
   }
 
-  // Check if any opponent's piece can capture the king
-  const opponentColor = color === 'white' ? 'black' : 'white'
-  for (let i = 0; i < 8; i++) {
-    for (let j = 0; j < 8; j++) {
-      const piece = board.value[i][j]
-      if (piece && piece.color === opponentColor) {
-        if (isValidMove(i, j, kingRow, kingCol)) {
-          return true
-        }
-      }
-    }
-  }
-  return false
+  if (kingRow === -1 || kingCol === -1) return false
+
+  // Check if any enemy piece can attack the king
+  return isSquareUnderAttack(kingRow, kingCol, color)
 }
 
 const hasLegalMoves = (color) => {
