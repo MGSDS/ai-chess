@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: chess-app
-        image: chess-app:latest
+        image: ghcr.io/mgsds/ai-chess:main
         imagePullPolicy: Always
         ports:
         - containerPort: 80
